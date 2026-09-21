@@ -20,3 +20,9 @@ end, {
   nargs = "*",
   desc = "Toggle tuicr terminal window",
 })
+
+vim.api.nvim_create_user_command("TuicrHide", function()
+  tuicr.hide()
+end, {
+  desc = "Hide the tuicr window, keeping the session alive in the background",
+})

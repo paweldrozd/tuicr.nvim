@@ -65,6 +65,10 @@ local function valid_buffer()
   return M.state.buf ~= nil and vim.api.nvim_buf_is_valid(M.state.buf)
 end
 
+local function has_live_session()
+  return valid_buffer() and M.state.job ~= nil and vim.fn.bufwinid(M.state.buf) == -1
+end
+
 local function cleanup_window(keep_buf)
   if valid_window() then
     pcall(vim.api.nvim_win_close, M.state.win, true)
@@ -100,8 +104,14 @@ local function on_exit(_, code)
       notify(string.format("tuicr exited with code %d", code), vim.log.levels.WARN)
     end
 
+    -- the process is gone: whatever is left of the buffer/window can no
+    -- longer be reused as a session, so tear it all the way down.
     if M.state.closing or config.get().close_on_exit then
       cleanup_window(false)
+    else
+      -- leave the (now inert) buffer/window on screen so the user can read
+      -- the exit output, but stop treating it as reusable state.
+      M.state.buf = nil
     end
 
     M.state.closing = false
@@ -211,6 +221,15 @@ local function set_terminal_keymaps(buf, keymaps)
           nowait = true,
           desc = "Close tuicr window",
         })
+      elseif mapping.action == "hide" then
+        vim.keymap.set(mapping.mode, lhs, function()
+          M.hide()
+        end, {
+          buffer = buf,
+          silent = true,
+          nowait = true,
+          desc = "Hide tuicr window (keep session alive)",
+        })
       elseif type(mapping.action) == "function" then
         vim.keymap.set(mapping.mode, lhs, mapping.action, {
           buffer = buf,
@@ -277,13 +296,21 @@ function M.close(force)
   schedule_force_close(opts.force_close_timeout_ms)
 end
 
-function M.open(extra)
-  local opts = vim.tbl_deep_extend("force", config.get(), extra or {})
-
-  if vim.fn.executable(opts.bin) ~= 1 then
-    notify(string.format("%q is not executable. Install tuicr first.", opts.bin), vim.log.levels.ERROR)
+-- Hide the wrapper window without touching the underlying tuicr process.
+-- The terminal buffer keeps `bufhidden = "hide"`, so the job (and its PTY)
+-- stays alive in the background; a later `open()`/`toggle()` reattaches to
+-- it instead of spawning a new `tuicr` process.
+function M.hide()
+  if not valid_window() then
     return
   end
+
+  pcall(vim.api.nvim_win_close, M.state.win, true)
+  M.state.win = nil
+end
+
+function M.open(extra)
+  local opts = vim.tbl_deep_extend("force", config.get(), extra or {})
 
   if M.is_open() then
     vim.api.nvim_set_current_win(M.state.win)
@@ -293,8 +320,25 @@ function M.open(extra)
     return
   end
 
+  if has_live_session() then
+    local win = create_window(M.state.buf, opts.win or {})
+    M.state.win = win
+
+    apply_window_options(win, M.state.buf, opts.win or {})
+
+    if opts.auto_insert then
+      vim.cmd("startinsert")
+    end
+    return
+  end
+
+  if vim.fn.executable(opts.bin) ~= 1 then
+    notify(string.format("%q is not executable. Install tuicr first.", opts.bin), vim.log.levels.ERROR)
+    return
+  end
+
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].filetype = "tuicr"
 
   local win = create_window(buf, opts.win or {})
@@ -329,7 +373,7 @@ end
 
 function M.toggle(extra)
   if M.is_open() then
-    M.close()
+    M.hide()
     return
   end
 

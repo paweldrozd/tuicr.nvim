@@ -10,8 +10,9 @@ local defaults = {
   args = {},
   env = {},
   keymaps = {
-    q = { action = "close", mode = "n" },
+    q = { action = "hide", mode = { "n", "t" } },
     ["<C-q>"] = { action = "close", mode = { "n", "t" } },
+    ["<C-h>"] = { action = "hide", mode = { "n", "t" } },
     ["<Esc><Esc>"] = { action = "normal_mode", mode = "t" },
   },
   win = {
